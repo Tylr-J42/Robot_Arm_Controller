@@ -48,7 +48,7 @@ current_motor_positions = convert_virtual_to_motor([0.0,
                                                     0.0*math.pi/180.0])  # In motor radians
 
 def setup_gpio():
-    GPIO.setmode(GPIO.BCM)
+    GPIO.setmode(GPIO.BOARD)
     for dir_pin, step_pin in zip(DIR_PINS, STEP_PINS):
         GPIO.setup(dir_pin, GPIO.OUT)
         GPIO.setup(step_pin, GPIO.OUT)
