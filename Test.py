@@ -1,10 +1,15 @@
-import pigpio
+import lgpio
 import time
 
-pi = pigpio.pi()
+h = lgpio.gpiochip_open(4)
+lgpio.gpio_claim_output(h, 23)
+lgpio.gpio_claim_output(h, 24)
 
-pi.set_mode(12, pigpio.OUTPUT)
+# for 23(high torque) open: 0/180*10+2.5
+# for 24 open: 185/180*10+2.5
+# for 23(high torque) closed: 180/180*10+2.5
+# for 24 closed: 0/180*10+2.5
+lgpio.tx_pwm(h, 23, 50, 80/180*10+2.5)
+time.sleep(10)
 
-pi.set_PWM_frequency(12, 50)
-pi.set_PWM_dutycycle(12, 90/180+2.5)
-time.sleep(4)
+lgpio.gpiochip_close(h)

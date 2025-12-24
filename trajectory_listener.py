@@ -6,9 +6,10 @@ import numpy as np
 import time
 import math
 import RPi.GPIO as GPIO
+import lgpio
 
 # Config
-JOINT_NAMES = ['1st', '2nd', '3rd', '4th', '5th', '6th']  # URDF virtual joints
+JOINT_NAMES = ['1st', '2nd', '3rd', '4th', '5th', '6th', 'gripper']  # URDF virtual joints
 DIR_PINS = [31, 36, 38, 33, 23, 22]
 STEP_PINS = [32, 37, 40, 35, 21, 29]
 EN_PIN = 11
@@ -66,28 +67,52 @@ start_position = convert_virtual_to_motor([0.0,
 
 current_motor_positions = start_position
 
-def setup_gpio():
-    GPIO.setmode(GPIO.BOARD)
+GPIO.setmode(GPIO.BOARD)
 
-    GPIO.setup(DIR_PINS[0], GPIO.OUT)
-    GPIO.setup(DIR_PINS[1], GPIO.OUT)
-    GPIO.setup(DIR_PINS[2], GPIO.OUT)
-    GPIO.setup(DIR_PINS[3], GPIO.OUT)
-    GPIO.setup(DIR_PINS[4], GPIO.OUT)
-    GPIO.setup(DIR_PINS[5], GPIO.OUT)
-    GPIO.setup(STEP_PINS[0], GPIO.OUT)
-    GPIO.setup(STEP_PINS[1], GPIO.OUT)
-    GPIO.setup(STEP_PINS[2], GPIO.OUT)
-    GPIO.setup(STEP_PINS[3], GPIO.OUT)
-    GPIO.setup(STEP_PINS[4], GPIO.OUT)
-    GPIO.setup(STEP_PINS[5], GPIO.OUT)
+GPIO.setup(DIR_PINS[0], GPIO.OUT)
+GPIO.setup(DIR_PINS[1], GPIO.OUT)
+GPIO.setup(DIR_PINS[2], GPIO.OUT)
+GPIO.setup(DIR_PINS[3], GPIO.OUT)
+GPIO.setup(DIR_PINS[4], GPIO.OUT)
+GPIO.setup(DIR_PINS[5], GPIO.OUT)
+GPIO.setup(STEP_PINS[0], GPIO.OUT)
+GPIO.setup(STEP_PINS[1], GPIO.OUT)
+GPIO.setup(STEP_PINS[2], GPIO.OUT)
+GPIO.setup(STEP_PINS[3], GPIO.OUT)
+GPIO.setup(STEP_PINS[4], GPIO.OUT)
+GPIO.setup(STEP_PINS[5], GPIO.OUT)
 
-    GPIO.setup(12, GPIO.OUT)
+GPIO.setup(12, GPIO.OUT)
 
-    GPIO.setup(EN_PIN, GPIO.OUT)
+GPIO.setup(EN_PIN, GPIO.OUT)
+
+h = lgpio.gpiochip_open(4)
+lgpio.gpio_claim_output(h, 23)
+lgpio.gpio_claim_output(h, 24)
 
 def cleanup_gpio():
     GPIO.cleanup()
+    lgpio.gpiochip_close(h)
+
+def open_gripper():
+    # for 23(high torque) open: 0/180*10+2.5
+    # for 24 open: 185/180*10+2.5
+    # for 23(high torque) closed: 180/180*10+2.5
+    # for 24 closed: 0/180*10+2.5
+    lgpio.tx_pwm(h, 23, 50, 0/180*10+2.5)
+    lgpio.tx_pwm(h, 24, 50, 185/180*10+2.5)
+
+def close_gripper():
+    # for 23(high torque) open: 0/180*10+2.5
+    # for 24 open: 185/180*10+2.5
+    # for 23(high torque) closed: 180/180*10+2.5
+    # for 24 closed: 0/180*10+2.5
+    lgpio.tx_pwm(h, 23, 50, 80/180*10+2.5)
+    lgpio.tx_pwm(h, 24, 50, 100/180*10+2.5)
+
+def stop_gripper():
+    lgpio.tx_pwm(h, 23, 50, 0)
+    lgpio.tx_pwm(h, 24, 50, 0)
 
 def move_steppers(target_motor_positions, time_to_goal):
     """Move steppers to target motor positions."""
@@ -114,8 +139,8 @@ def move_steppers(target_motor_positions, time_to_goal):
             print(directions[i])
 
     prev_time_list = [0, 0, 0, 0, 0, 0]
-
-    while max(count_list)<=max(steps_list)*2:
+    
+    while max(count_list)<=max(steps_list)*2 and max(steps_list)!=0:
         
         for m in range(6):
             current_time = time.perf_counter()
@@ -133,6 +158,11 @@ def move_steppers(target_motor_positions, time_to_goal):
 
     current_motor_positions = target_motor_positions
     print(current_motor_positions)
+
+    if(max(steps_list) == 0):
+        return True
+    else:
+        return False
 
 class TrajectoryListener(Node):
     def __init__(self):
@@ -159,8 +189,9 @@ class TrajectoryListener(Node):
 
         for i, point in enumerate(msg.points):
             # 1. ROS gives radians → convert to degrees
-            joints_rad = point.positions
+            joints_rad = point.positions[0:6]
             joints_deg = [round(np.degrees(q), 2) for q in joints_rad]
+            gripper_val = point.positions[6]
 
             # 2. Pretty log
             t_sec = point.time_from_start.sec + point.time_from_start.nanosec * 1e-9
@@ -168,12 +199,22 @@ class TrajectoryListener(Node):
                                 f"[{', '.join(f'{d:6.1f}°' for d in joints_deg)}]")
             
             if(t_sec != 0):
-                move_steppers(convert_virtual_to_motor(joints_rad), t_sec)
+                motion_start = time.time()
+                if(gripper_val == 0):
+                    open_gripper()
+                elif(gripper_val == 100):
+                    close_gripper()
+                no_movement = move_steppers(convert_virtual_to_motor(joints_rad), t_sec)
+
+                if no_movement:
+                    time.sleep(t_sec)
+
+                    
 
             print("done")
+        stop_gripper()
 
 def main():
-    setup_gpio()
     rclpy.init()
     node = TrajectoryListener()
     try:
