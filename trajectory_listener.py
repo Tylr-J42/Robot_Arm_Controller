@@ -10,7 +10,7 @@ import lgpio
 
 # Config
 JOINT_NAMES = ['1st', '2nd', '3rd', '4th', '5th', '6th', 'gripper']  # URDF virtual joints
-DIR_PINS = [31, 36, 38, 33, 23, 22]
+DIR_PINS = [31, 36, 38, 33, 23, 22]n
 STEP_PINS = [32, 37, 40, 35, 21, 29]
 EN_PIN = 11
 STEPS_PER_REV = 200 * 8 # steppers at 1/8 microstepping
