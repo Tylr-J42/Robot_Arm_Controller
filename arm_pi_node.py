@@ -74,8 +74,13 @@ def convert_motor_to_virtual(motor_positions):
     j2 = m2 / GEAR_RATIOS[1]
     j3 = m3 / GEAR_RATIOS[2]
     j4 = m4 / GEAR_RATIOS[3]
-    pitch = (m5 + m6) * WRIST_DIFF_FACTOR / GEAR_RATIOS[4]
-    yaw = (m5 - m6) * WRIST_DIFF_FACTOR / GEAR_RATIOS[5]
+    # True inverse of convert_virtual_to_motor's wrist mixing:
+    #   m5 = (pitch + 2*yaw)*GR5/2 ;  m6 = (pitch - 2*yaw)*GR6/2
+    # solving for pitch/yaw. The previous formula was NOT the inverse and
+    # produced out-of-bounds joint states (e.g. 6th -> +6.44 rad), which made
+    # MoveIt reject the start state on every plan.
+    pitch = m5 / GEAR_RATIOS[4] + m6 / GEAR_RATIOS[5]
+    yaw = (m5 / GEAR_RATIOS[4] - m6 / GEAR_RATIOS[5]) / 2
     return [j1, j2, j3, j4, pitch, yaw]
 
 
