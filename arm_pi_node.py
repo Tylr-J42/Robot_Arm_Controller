@@ -91,7 +91,7 @@ start_position = convert_virtual_to_motor([0.0,
                                            -45.0*math.pi/180.0,
                                            -90.0*math.pi/180.0,
                                            0.0*math.pi/180.0,
-                                           -96.0*math.pi/180.0,
+                                           96.0*math.pi/180.0,
                                            0.0*math.pi/180.0])   # motor radians
 
 current_motor_positions = start_position
