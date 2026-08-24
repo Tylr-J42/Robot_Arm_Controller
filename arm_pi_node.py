@@ -87,7 +87,7 @@ def convert_motor_to_virtual(motor_positions):
 # ----------------------------------------------------------------------------
 # Starting state
 # ----------------------------------------------------------------------------
-start_position = convert_virtual_to_motor([0.0,
+start_position = convert_virtual_to_motor([180.0*math.pi/180.0,
                                            -45.0*math.pi/180.0,
                                            -90.0*math.pi/180.0,
                                            0.0*math.pi/180.0,
