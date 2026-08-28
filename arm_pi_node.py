@@ -116,21 +116,68 @@ def cleanup_gpio():
 
 
 # ----------------------------------------------------------------------------
-# Gripper (servos, driven by lgpio PWM)  (unchanged)
+# Gripper (servos, driven by lgpio PWM)
 # ----------------------------------------------------------------------------
+# The two servos are mirrored: 23 increases as it closes, 24 decreases.
+GRIPPER_PINS = (23, 24)
+GRIPPER_OPEN_ANGLES = (0.0, 185.0)
+
+# Angles at which the jaws just MEET the cube. Commanding exactly this is what
+# dropped it: a positional servo only produces torque while it is short of its
+# setpoint, so jaws that arrive at the cube's surface arrive and then stop
+# pushing. Grip comes from commanding PAST the contact point, so the servo
+# stays permanently short of its target and keeps driving into the cube.
+GRIPPER_TOUCH_ANGLES = (80.0, 100.0)
+
+# How far past contact to command. This is the grip-force knob. Too little and
+# the cube slips; too much and the servos stall hard, which on this arm means
+# a sustained current draw into a supply that already browns out -- so raise it
+# in small steps and listen for the servos straining.
+GRIPPER_SQUEEZE_DEG = 15.0
+
+# A stalled servo holds only while it is being told to. lgpio's tx_pwm is
+# software-timed, and the trajectory executor busy-waits a whole CPU core for
+# the length of every move, so re-assert the setpoint rather than assuming one
+# call holds for the entire retreat.
+GRIPPER_REASSERT_HZ = 4.0
+
+_gripper_duty = None      # last commanded (duty23, duty24), or None when limp
+
+
+def _servo_duty(angle_deg):
+    """Servo angle -> duty cycle percent at 50 Hz."""
+    return angle_deg / 180.0 * 10.0 + 2.5
+
+
+def _apply_gripper(duties):
+    global _gripper_duty
+    _gripper_duty = duties
+    for pin, duty in zip(GRIPPER_PINS, duties):
+        lgpio.tx_pwm(h, pin, 50, duty)
+
+
 def open_gripper():
-    lgpio.tx_pwm(h, 23, 50, 0/180*10+2.5)
-    lgpio.tx_pwm(h, 24, 50, 185/180*10+2.5)
+    _apply_gripper(tuple(_servo_duty(a) for a in GRIPPER_OPEN_ANGLES))
 
 
 def close_gripper():
-    lgpio.tx_pwm(h, 23, 50, 80/180*10+2.5)
-    lgpio.tx_pwm(h, 24, 50, 100/180*10+2.5)
+    a, b = GRIPPER_TOUCH_ANGLES
+    _apply_gripper((_servo_duty(a + GRIPPER_SQUEEZE_DEG),
+                    _servo_duty(b - GRIPPER_SQUEEZE_DEG)))
+
+
+def hold_gripper():
+    """Re-send the current setpoint. No-op while the gripper is released."""
+    if _gripper_duty is not None:
+        for pin, duty in zip(GRIPPER_PINS, _gripper_duty):
+            lgpio.tx_pwm(h, pin, 50, duty)
 
 
 def stop_gripper():
-    lgpio.tx_pwm(h, 23, 50, 0)
-    lgpio.tx_pwm(h, 24, 50, 0)
+    global _gripper_duty
+    _gripper_duty = None
+    for pin in GRIPPER_PINS:
+        lgpio.tx_pwm(h, pin, 50, 0)
 
 
 # ----------------------------------------------------------------------------
@@ -225,6 +272,14 @@ class ArmPiNode(Node):
         self.create_timer(1.0 / JOINT_STATE_RATE_HZ, self.publish_joint_states,
                           callback_group=cb)
 
+        # Keep re-sending the gripper setpoint. execute_callback blocks for the
+        # whole of a trajectory, so this only gets a chance to run because the
+        # group is reentrant and the executor is multi-threaded -- same reason
+        # /joint_states keeps publishing mid-move. Without it the servos are
+        # commanded once and left, and the cube is released during the retreat.
+        self.create_timer(1.0 / GRIPPER_REASSERT_HZ, hold_gripper,
+                          callback_group=cb)
+
         self.get_logger().info(
             "arm_pi_node up: FollowJointTrajectory @ "
             "/arm_controller/follow_joint_trajectory")
@@ -305,7 +360,10 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        stop_gripper()
+        # Deliberately NOT stop_gripper(): releasing here drops whatever is in
+        # the jaws on a Ctrl-C. cleanup_gpio() closes the chip a moment later,
+        # which ends the PWM anyway, so the grip is lost on exit regardless --
+        # this just avoids opening the jaws on purpose while holding a cube.
         node.destroy_node()
         rclpy.shutdown()
         cleanup_gpio()
