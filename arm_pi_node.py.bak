@@ -87,7 +87,7 @@ def convert_motor_to_virtual(motor_positions):
 # ----------------------------------------------------------------------------
 # Starting state
 # ----------------------------------------------------------------------------
-start_position = convert_virtual_to_motor([180.0*math.pi/180.0,
+start_position = convert_virtual_to_motor([0.0,
                                            -45.0*math.pi/180.0,
                                            -90.0*math.pi/180.0,
                                            0.0*math.pi/180.0,
@@ -175,27 +175,7 @@ def move_steppers(target_motor_positions, time_to_goal):
                     count_list[m] = count_list[m] + 1
                     prev_time_list[m] = current_time
 
-    # Advance by what we ACTUALLY stepped, never by what we were asked for.
-    #
-    # steps_list truncates (int()), so every waypoint leaves a sub-step
-    # remainder. Assigning the commanded target here threw that remainder away
-    # each time, and because truncation always rounds toward zero the loss is
-    # one-directional: it accumulates into a systematic UNDERSHOOT that grows
-    # with the number of waypoints. A 0.15 m descent at lin_velocity_scaling
-    # 0.01 is ~154 waypoints, which measured out to roughly 5 mm at the tip --
-    # and the arm has no encoders, so nothing downstream could ever see it.
-    # /joint_states reported the commanded value, so RViz showed the arm
-    # arriving while the hardware sat short of the cube.
-    #
-    # Carrying the remainder into the next segment's delta keeps the total
-    # error bounded under a single step forever, instead of growing with path
-    # length. It also means the descent no longer has to be run slowly to stay
-    # accurate -- slower made this worse, not better.
-    step_rad = RAD_PER_REV / STEPS_PER_REV
-    current_motor_positions = [
-        c + (s if d >= 0 else -s) * step_rad
-        for c, s, d in zip(current_motor_positions, steps_list, deltas)
-    ]
+    current_motor_positions = list(target_motor_positions)
     return max(steps_list) == 0    # True == no movement happened
 
 
