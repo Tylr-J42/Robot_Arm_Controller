@@ -129,17 +129,22 @@ GRIPPER_OPEN_ANGLES = (0.0, 185.0)
 # stays permanently short of its target and keeps driving into the cube.
 GRIPPER_TOUCH_ANGLES = (80.0, 100.0)
 
-# How far past contact to command. This is the grip-force knob. Too little and
-# the cube slips; too much and the servos stall hard, which on this arm means
-# a sustained current draw into a supply that already browns out -- so raise it
-# in small steps and listen for the servos straining.
-GRIPPER_SQUEEZE_DEG = 15.0
+# Do NOT periodically re-send the setpoint. tx_pwm's pulse_cycles defaults to
+# 0, meaning "transmit indefinitely", so one call already holds forever.
+# Calling it again restarts the waveform generator and truncates whatever pulse
+# is in flight; the servo sees a malformed pulse and twitches. Re-asserting at
+# 4 Hz produced exactly that -- a jitter four times a second that shook the
+# cube out of the jaws during the lift. Set the setpoint once, on change only.
 
-# A stalled servo holds only while it is being told to. lgpio's tx_pwm is
-# software-timed, and the trajectory executor busy-waits a whole CPU core for
-# the length of every move, so re-assert the setpoint rather than assuming one
-# call holds for the entire retreat.
-GRIPPER_REASSERT_HZ = 4.0
+# Grip is a two-stage move. The first bite is firm enough to seat the cube
+# against both pads; holding there indefinitely means a hard-stalled servo
+# drawing peak current for the whole lift, which on this arm feeds straight
+# back into the supply brownouts. Backing off to a smaller over-travel keeps
+# the servo short of its setpoint -- so it is still pushing, still gripping --
+# at a fraction of the current.
+GRIPPER_BITE_DEG = 15.0
+GRIPPER_HOLD_DEG = 8.0
+GRIPPER_BITE_SECONDS = 0.4
 
 _gripper_duty = None      # last commanded (duty23, duty24), or None when limp
 
@@ -160,17 +165,16 @@ def open_gripper():
     _apply_gripper(tuple(_servo_duty(a) for a in GRIPPER_OPEN_ANGLES))
 
 
-def close_gripper():
+def _squeeze(deg):
     a, b = GRIPPER_TOUCH_ANGLES
-    _apply_gripper((_servo_duty(a + GRIPPER_SQUEEZE_DEG),
-                    _servo_duty(b - GRIPPER_SQUEEZE_DEG)))
+    return (_servo_duty(a + deg), _servo_duty(b - deg))
 
 
-def hold_gripper():
-    """Re-send the current setpoint. No-op while the gripper is released."""
-    if _gripper_duty is not None:
-        for pin, duty in zip(GRIPPER_PINS, _gripper_duty):
-            lgpio.tx_pwm(h, pin, 50, duty)
+def close_gripper():
+    """Bite firmly to seat the cube, then settle to a sustainable hold."""
+    _apply_gripper(_squeeze(GRIPPER_BITE_DEG))
+    time.sleep(GRIPPER_BITE_SECONDS)
+    _apply_gripper(_squeeze(GRIPPER_HOLD_DEG))
 
 
 def stop_gripper():
@@ -270,14 +274,6 @@ class ArmPiNode(Node):
         # Continuous /joint_states so move_group knows where we are.
         self.js_pub = self.create_publisher(JointState, '/joint_states', 10)
         self.create_timer(1.0 / JOINT_STATE_RATE_HZ, self.publish_joint_states,
-                          callback_group=cb)
-
-        # Keep re-sending the gripper setpoint. execute_callback blocks for the
-        # whole of a trajectory, so this only gets a chance to run because the
-        # group is reentrant and the executor is multi-threaded -- same reason
-        # /joint_states keeps publishing mid-move. Without it the servos are
-        # commanded once and left, and the cube is released during the retreat.
-        self.create_timer(1.0 / GRIPPER_REASSERT_HZ, hold_gripper,
                           callback_group=cb)
 
         self.get_logger().info(
