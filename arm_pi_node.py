@@ -127,24 +127,39 @@ GRIPPER_OPEN_ANGLES = (0.0, 185.0)
 # setpoint, so jaws that arrive at the cube's surface arrive and then stop
 # pushing. Grip comes from commanding PAST the contact point, so the servo
 # stays permanently short of its target and keeps driving into the cube.
-GRIPPER_TOUCH_ANGLES = (80.0, 100.0)
 
 # Do NOT periodically re-send the setpoint. tx_pwm's pulse_cycles defaults to
 # 0, meaning "transmit indefinitely", so one call already holds forever.
 # Calling it again restarts the waveform generator and truncates whatever pulse
-# is in flight; the servo sees a malformed pulse and twitches. Re-asserting at
-# 4 Hz produced exactly that -- a jitter four times a second that shook the
-# cube out of the jaws during the lift. Set the setpoint once, on change only.
-
-# Grip is a two-stage move. The first bite is firm enough to seat the cube
-# against both pads; holding there indefinitely means a hard-stalled servo
-# drawing peak current for the whole lift, which on this arm feeds straight
-# back into the supply brownouts. Backing off to a smaller over-travel keeps
-# the servo short of its setpoint -- so it is still pushing, still gripping --
-# at a fraction of the current.
+# is in flight; the servo sees a malformed pulse and twitches.
+#
+# Grip procedure, in the order that matters:
+#
+#  1. RAMP closed rather than stepping. A step command makes the servo slam
+#     shut at full speed, bounce off the cube, and then hunt around its
+#     setpoint -- which is the jitter. Closing in small increments lets it
+#     arrive with almost no velocity and settle.
+#  2. Bite, then back off to a lower sustained over-travel. Still short of the
+#     setpoint, so still pushing, but far less hunting.
+#  3. Optionally cut the signal once gripped. A servo with no pulse train is
+#     limp, so this only works if the linkage holds the cube by friction --
+#     but when it does it is strictly the best answer, because a servo that
+#     is not being driven cannot jitter at all. Test it with gripper_tune.py.
 GRIPPER_BITE_DEG = 15.0
 GRIPPER_HOLD_DEG = 8.0
 GRIPPER_BITE_SECONDS = 0.4
+GRIPPER_RAMP_DEG = 1.5          # increment per ramp step
+GRIPPER_RAMP_DT = 0.02          # seconds between ramp steps
+
+# Set True if gripper_tune.py shows the jaws hold the cube with the signal off.
+GRIPPER_CUT_SIGNAL_WHEN_HELD = False
+
+# Per-servo contact angles. Split so a mechanically asymmetric gripper can be
+# trimmed one side at a time: if the two servos meet the cube at different
+# points they fight each other through it, and the losing one is backdriven
+# and hunts continuously. Symmetric values are only a starting guess.
+GRIPPER_TOUCH_A = 80.0          # servo on GRIPPER_PINS[0], closes as it rises
+GRIPPER_TOUCH_B = 100.0         # servo on GRIPPER_PINS[1], closes as it falls
 
 _gripper_duty = None      # last commanded (duty23, duty24), or None when limp
 
@@ -166,15 +181,36 @@ def open_gripper():
 
 
 def _squeeze(deg):
-    a, b = GRIPPER_TOUCH_ANGLES
-    return (_servo_duty(a + deg), _servo_duty(b - deg))
+    """Duty pair at `deg` of over-travel past contact, per servo."""
+    return (_servo_duty(GRIPPER_TOUCH_A + deg),
+            _servo_duty(GRIPPER_TOUCH_B - deg))
+
+
+def _ramp_to(deg, start=None):
+    """Walk the jaws to `deg` of over-travel in small steps.
+
+    Arriving slowly is the whole point: a servo commanded straight to a
+    blocked position slams into the cube and then oscillates about an error
+    it can never null.
+    """
+    here = GRIPPER_OPEN_ANGLES[0] - GRIPPER_TOUCH_A if start is None else start
+    step = GRIPPER_RAMP_DEG if deg >= here else -GRIPPER_RAMP_DEG
+    n = max(1, int(abs(deg - here) / GRIPPER_RAMP_DEG))
+    for i in range(1, n + 1):
+        _apply_gripper(_squeeze(here + step * i))
+        time.sleep(GRIPPER_RAMP_DT)
+    _apply_gripper(_squeeze(deg))
 
 
 def close_gripper():
-    """Bite firmly to seat the cube, then settle to a sustainable hold."""
-    _apply_gripper(_squeeze(GRIPPER_BITE_DEG))
+    """Ramp closed, bite to seat the cube, then settle to a sustainable hold."""
+    _ramp_to(GRIPPER_BITE_DEG)
     time.sleep(GRIPPER_BITE_SECONDS)
     _apply_gripper(_squeeze(GRIPPER_HOLD_DEG))
+    if GRIPPER_CUT_SIGNAL_WHEN_HELD:
+        time.sleep(0.2)
+        for pin in GRIPPER_PINS:
+            lgpio.tx_pwm(h, pin, 50, 0)   # limp: cannot jitter, cannot re-grip
 
 
 def stop_gripper():
